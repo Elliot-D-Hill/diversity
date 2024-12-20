@@ -7,8 +7,7 @@ from pytest import fixture, mark, raises
 from scipy.sparse import coo_array
 
 from greylock.abundance import (
-    Abundance,
-    AbundanceFromDataFrame,
+    AbundanceForDiversity,
     make_abundance,
 )
 
@@ -203,8 +202,8 @@ class AbundanceOneSubcommunity:
 @mark.parametrize(
     "counts, expected",
     [
-        (counts_array_3by2(), Abundance),
-        (counts_dataframe_3by2, AbundanceFromDataFrame),
+        (counts_array_3by2(), AbundanceForDiversity),
+        (counts_dataframe_3by2, AbundanceForDiversity),
     ],
 )
 def test_make_abundance(counts, expected):

@@ -1,6 +1,7 @@
 from typing import List, Any, Callable, Union
 from numpy import ndarray, empty, concatenate, float64, vstack, zeros
 from pandas import DataFrame
+from greylock.exceptions import InvalidArgumentError
 
 # avoid mypy error: see https://github.com/jorenham/scipy-stubs/issues/100
 from scipy.sparse import spmatrix  # type: ignore
@@ -43,11 +44,15 @@ class SimilarityFromRayFunction(SimilarityFromFunction):
         super().__init__(func, X, chunk_size)
         self.max_inflight_tasks = max_inflight_tasks
 
+    def get_Y(self):
+        return None
+
     def weighted_abundances(
         self, relative_abundance: Union[ndarray, spmatrix]
     ) -> ndarray:
         weighted_similarity_chunk = ray.remote(weighted_similarity_chunk_nonsymmetric)
         X_ref = ray.put(self.X)
+        Y_ref = ray.put(self.get_Y())
         abundance_ref = ray.put(relative_abundance)
         futures: List[Union[ray._raylet.ObjectRef, ray._raylet.ObjectRefGenerator]] = []
         results = []
@@ -58,6 +63,7 @@ class SimilarityFromRayFunction(SimilarityFromFunction):
             chunk_future = weighted_similarity_chunk.remote(
                 similarity=self.func,
                 X=X_ref,
+                Y=Y_ref,
                 relative_abundance=abundance_ref,
                 chunk_size=self.chunk_size,
                 chunk_index=chunk_index,
@@ -67,6 +73,29 @@ class SimilarityFromRayFunction(SimilarityFromFunction):
         results.sort()  # This sorts by chunk index (1st in tuple)
         weighted_similarity_chunks = [r[1] for r in results]
         return concatenate(weighted_similarity_chunks)
+
+
+class IntersetSimilarityFromRayFunction(SimilarityFromRayFunction):
+    def __init__(
+        self,
+        func: Callable,
+        X: Union[ndarray, DataFrame],
+        Y: Union[ndarray, DataFrame],
+        chunk_size: int = 100,
+        max_inflight_tasks=64,
+    ):
+        super().__init__(func, X, chunk_size, max_inflight_tasks)
+        self.Y = Y
+
+    def get_Y(self):
+        return self.Y
+
+    def self_similar_weighted_abundances(
+        self, relative_abundance: Union[ndarray, spmatrix]
+    ):
+        raise InvalidArgumentError(
+            "Inappropriate similarity class for diversity measures"
+        )
 
 
 class SimilarityFromSymmetricRayFunction(SimilarityFromSymmetricFunction):

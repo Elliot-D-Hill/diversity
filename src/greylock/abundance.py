@@ -3,15 +3,11 @@
 Classes
 -------
 Abundance
-    Abstract base class for relative species abundances in (meta-/sub-)
-    communities.
-AbundanceFromArray
-    Implements Abundance for fast, but memory-heavy calculations.
+    Relative (normalized) species abundances in (meta-/sub-) communities
+AbundanceForDiversity
+    Species abundances-- normalized over metacommunity, normalized over each subcommunity,
+    and totalled across metacommunity-- as is required for diversity calculations
 
-Functions
----------
-make_abundance
-    Chooses and creates instance of concrete Abundance implementation.
 """
 
 from functools import cached_property
@@ -23,10 +19,6 @@ from scipy.sparse import issparse  # type: ignore[import]
 
 
 class Abundance:
-    """Calculates metacommuntiy and subcommunity relative abundance
-    components from a numpy.ndarray containing species counts
-    """
-
     def __init__(
         self, counts: ndarray, subcommunity_names: Iterable[Union[str, int]]
     ) -> None:
@@ -40,12 +32,69 @@ class Abundance:
         """
         self.subcommunities_names = subcommunity_names
         self.num_subcommunities = counts.shape[1]
-
         self.subcommunity_abundance = self.make_subcommunity_abundance(counts=counts)
-        self.metacommunity_abundance = self.make_metacommunity_abundance()
         self.normalized_subcommunity_abundance = (
             self.make_normalized_subcommunity_abundance()
         )
+
+    def make_subcommunity_abundance(self, counts: ndarray) -> ndarray:
+        """Calculates the relative abundances in subcommunities.
+
+        Parameters
+        ----------
+        counts
+            2-d array with one column per subcommunity, one row per
+            species, containing the count of each species in the
+            corresponding subcommunities.
+
+        Returns
+        -------
+        A numpy.ndarray of shape (n_species, n_subcommunities), where
+        rows correspond to unique species, columns correspond to
+        subcommunities and each element is the abundance of the species
+        in the subcommunity relative to the total metacommunity size.
+        """
+        return counts / counts.sum()
+
+    def make_subcommunity_normalizing_constants(self) -> ndarray:
+        """Calculates subcommunity normalizing constants.
+
+        Returns
+        -------
+        A numpy.ndarray of shape (n_subcommunities,), with the fraction
+        of each subcommunity's size of the metacommunity.
+        """
+        return self.subcommunity_abundance.sum(axis=0)
+
+    def make_normalized_subcommunity_abundance(self) -> ndarray:
+        """Calculates normalized relative abundances in subcommunities.
+
+        Returns
+        -------
+        A numpy.ndarray of shape (n_species, n_subcommunities), where
+        rows correspond to unique species, columns correspond to
+        subcommunities and each element is the abundance of the species
+        in the subcommunity relative to the subcommunity size.
+        """
+        self.subcommunity_normalizing_constants = (
+            self.make_subcommunity_normalizing_constants()
+        )
+        return self.subcommunity_abundance / self.subcommunity_normalizing_constants
+
+    def premultiply_by(self, similarity):
+        return similarity.weighted_abundances(self.normalized_subcommunity_abundance)
+
+
+class AbundanceForDiversity(Abundance):
+    """Calculates metacommuntiy and subcommunity relative abundance
+    components from a numpy.ndarray containing species counts
+    """
+
+    def __init__(
+        self, counts: ndarray, subcommunity_names: Iterable[Union[str, int]]
+    ) -> None:
+        super().__init__(counts, subcommunity_names)
+        self.metacommunity_abundance = self.make_metacommunity_abundance()
         self.unified_abundance_array = None
 
     def unify_abundance_array(self) -> None:
@@ -85,7 +134,7 @@ class Abundance:
 
     def premultiply_by(self, similarity):
         if similarity.is_expensive():
-            all_ordinariness = similarity.weighted_abundances(
+            all_ordinariness = similarity.self_similar_weighted_abundances(
                 self.get_unified_abundance_array()
             )
             metacommunity_ordinariness = all_ordinariness[:, [0]]
@@ -96,39 +145,22 @@ class Abundance:
                 :, (1 + self.num_subcommunities) :
             ]
         else:
-            metacommunity_ordinariness = similarity.weighted_abundances(
+            metacommunity_ordinariness = similarity.self_similar_weighted_abundances(
                 self.metacommunity_abundance
             )
-            subcommunity_ordinariness = similarity.weighted_abundances(
+            subcommunity_ordinariness = similarity.self_similar_weighted_abundances(
                 self.subcommunity_abundance
             )
-            normalized_subcommunity_ordinariness = similarity.weighted_abundances(
-                self.normalized_subcommunity_abundance
+            normalized_subcommunity_ordinariness = (
+                similarity.self_similar_weighted_abundances(
+                    self.normalized_subcommunity_abundance
+                )
             )
         return (
             metacommunity_ordinariness,
             subcommunity_ordinariness,
             normalized_subcommunity_ordinariness,
         )
-
-    def make_subcommunity_abundance(self, counts: ndarray) -> ndarray:
-        """Calculates the relative abundances in subcommunities.
-
-        Parameters
-        ----------
-        counts
-            2-d array with one column per subcommunity, one row per
-            species, containing the count of each species in the
-            corresponding subcommunities.
-
-        Returns
-        -------
-        A numpy.ndarray of shape (n_species, n_subcommunities), where
-        rows correspond to unique species, columns correspond to
-        subcommunities and each element is the abundance of the species
-        in the subcommunity relative to the total metacommunity size.
-        """
-        return counts / counts.sum()
 
     def make_metacommunity_abundance(self) -> ndarray:
         """Calculates the relative abundances in metacommunity.
@@ -141,56 +173,8 @@ class Abundance:
         """
         return self.subcommunity_abundance.sum(axis=1, keepdims=True)
 
-    def make_subcommunity_normalizing_constants(self) -> ndarray:
-        """Calculates subcommunity normalizing constants.
 
-        Returns
-        -------
-        A numpy.ndarray of shape (n_subcommunities,), with the fraction
-        of each subcommunity's size of the metacommunity.
-        """
-        return self.subcommunity_abundance.sum(axis=0)
-
-    def make_normalized_subcommunity_abundance(self) -> ndarray:
-        """Calculates normalized relative abundances in subcommunities.
-
-        Returns
-        -------
-        A numpy.ndarray of shape (n_species, n_subcommunities), where
-        rows correspond to unique species, columns correspond to
-        subcommunities and each element is the abundance of the species
-        in the subcommunity relative to the subcommunity size.
-        """
-        self.subcommunity_normalizing_constants = (
-            self.make_subcommunity_normalizing_constants()
-        )
-        return self.subcommunity_abundance / self.subcommunity_normalizing_constants
-
-
-class AbundanceFromArray(Abundance):
-
-    def __init__(self, counts: ndarray) -> None:
-        """
-        Parameters
-        ----------
-        counts
-            2-d array with one column per subcommunity, one row per
-            species, containing the count of each species in the
-            corresponding subcommunities.
-        """
-        super().__init__(counts, arange(counts.shape[1]))
-
-
-class AbundanceFromDataFrame(Abundance):
-    """Calculates metacommuntiy and subcommunity relative abundance
-    components from a pandas.DataFrame containing species counts
-    """
-
-    def __init__(self, counts: DataFrame) -> None:
-        super().__init__(counts.to_numpy(), counts.columns)
-
-
-def make_abundance(counts: Union[DataFrame, ndarray]) -> Abundance:
+def make_abundance(counts: Union[DataFrame, ndarray], for_diversity=True) -> Abundance:
     """Initializes a concrete subclass of Abundance.
 
     Parameters
@@ -203,13 +187,21 @@ def make_abundance(counts: Union[DataFrame, ndarray]) -> Abundance:
     -------
     An instance of a concrete subclass of Abundance.
     """
+    if for_diversity:
+        specific_class = AbundanceForDiversity
+    else:
+        specific_class = Abundance
     if isinstance(counts, DataFrame):
-        return AbundanceFromDataFrame(counts=counts)
+        return specific_class(
+            counts=counts.to_numpy(), subcommunity_names=counts.columns
+        )
     elif hasattr(counts, "shape"):
         if issparse(counts):
             raise TypeError("sparse abundance matrix not yet implemented")
         else:
-            return AbundanceFromArray(counts=counts)
+            return specific_class(
+                counts=counts, subcommunity_names=arange(counts.shape[1])
+            )
     else:
         raise NotImplementedError(
             f"Type {type(counts)} is not supported for argument "

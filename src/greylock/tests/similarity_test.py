@@ -25,12 +25,16 @@ from greylock.similarity import (
     SimilarityFromArray,
     SimilarityFromDataFrame,
     SimilarityFromFile,
+    IntersetSimilarityFromFile,
     SimilarityFromFunction,
     SimilarityFromSymmetricFunction,
+    IntersetSimilarityFromFunction,
     weighted_similarity_chunk_nonsymmetric,
     weighted_similarity_chunk_symmetric,
 )
 from greylock import Metacommunity
+from greylock.exceptions import InvalidArgumentError
+from greylock.abundance import make_abundance
 
 
 @fixture
@@ -70,6 +74,22 @@ similarity_filecontent_3by3_tsv = (
 similarities_filecontents_3by3_csv = (
     "species_1,species_2,species_3\n" "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
 )
+# fmt: off
+similarities_filecontents_32by3_csv = (
+    "species_1,species_2,species_3\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "1.0,0.5,0.1\n" "0.5,1.0,0.2\n" "0.1,0.2,1.0\n"
+    "0.0,0.5,0.0\n" "0.5,0.0,0.2\n" "0.0,0.2,0.0\n"
+    "0.0,0.5,0.0\n" "0.5,0.0,0.2\n" "0.0,0.2,0.0\n"
+    "0.0,0.5,0.0\n" "0.5,0.0,0.2\n" "0.0,0.2,0.0\n"
+    "0.0,0.5,0.0\n" "0.5,0.0,0.2\n" "0.0,0.2,0.0\n"
+)
+# fmt: on
 similarity_sparse_entries = {
     "shape": (3, 3),
     "row": array(
@@ -168,11 +188,12 @@ def make_similarity_from_file(tmp_path):
         filename="similarity_matrix.tsv",
         filecontent=similarity_filecontent_3by3_tsv,
         chunk_size=1,
+        similarity_class=SimilarityFromFile,
     ):
         filepath = tmp_path / filename
         with open(filepath, "w") as file:
             file.write(filecontent)
-        return SimilarityFromFile(similarity_file_path=filepath, chunk_size=chunk_size)
+        return similarity_class(similarity_file_path=filepath, chunk_size=chunk_size)
 
     return make
 
@@ -198,6 +219,38 @@ def test_weighted_abundances(
 ):
     similarity = make_similarity_from_file(**kwargs)
     assert allclose(similarity.weighted_abundances(relative_abundance), expected)
+
+
+def test_nonsquare_from_file(make_similarity_from_file):
+    sim = make_similarity_from_file(similarity_class=IntersetSimilarityFromFile)
+    counts = array([[1], [1], [1]])
+    with raises(InvalidArgumentError):
+        Metacommunity(counts, sim).to_dataframe(viewpoint=0)
+
+
+def test_interset_from_file(make_similarity_from_file):
+    sim = make_similarity_from_file(
+        filecontent=similarities_filecontents_32by3_csv,
+        chunk_size=4,
+        similarity_class=IntersetSimilarityFromFile,
+    )
+    counts = array([[50], [25], [25]])
+    abundance_object = make_abundance(counts, False)
+    # fmt: off
+    expected = array([[0.65, 0.55, 0.35,
+                      0.65, 0.55, 0.35,
+                      0.65, 0.35,
+                      0.65, 0.55, 0.35,
+                      0.65, 0.55, 0.35,
+                      0.65, 0.55, 0.35,
+                      0.65, 0.55, 0.35,
+                      0.125, 0.3, 0.05,
+                      0.125, 0.3, 0.05,
+                      0.125, 0.3, 0.05,
+                       0.125, 0.3, 0.05]]).T
+    # fmt: on
+    result = sim @ abundance_object
+    assert allclose(result, expected)
 
 
 @mark.parametrize(
@@ -272,6 +325,7 @@ def test_weighted_similarity_chunk(similarity_function):
     chunk_index, chunk = weighted_similarity_chunk_nonsymmetric(
         similarity=similarity_function,
         X=X_3by2,
+        Y=None,
         relative_abundance=relative_abundance_3by2,
         chunk_size=3,
         chunk_index=0,
@@ -703,3 +757,59 @@ def test_compuation_count(
     m.to_dataframe(viewpoint=0)
 
     assert callcounter[key] == expected_count
+
+
+@mark.parametrize(
+    "X, Y, abundance, expected",
+    [
+        [
+            array([[2, 1, 5], [4, 3, 2]]),
+            array([[2, 0, 5], [4, 2, 1], [2, 0, 5]]),
+            array([[0.5, 0.1], [0.25, 0.1], [0.25, 0.8]]),
+            array([[0.27846671, 0.33211435], [0.06766633, 0.03257625]]),
+        ],
+        [
+            array([[1, 0, 0]]),
+            array([[1, 0, 0], [0, 1, 0], [0, 1, 1]]),
+            array([[1.0, 0.8, 0.0], [0.0, 0.1, 0.5], [0.0, 0.1, 0.5]]),
+            array([[1.0, 0.84200379, 0.21001897]]),
+        ],
+    ],
+)
+def test_interset_similarity(X, Y, abundance, expected):
+    sim = IntersetSimilarityFromFunction(similarity_from_distance, X, Y)
+    result = sim.weighted_abundances(abundance)
+    assert allclose(result, expected)
+    abundance_obj = make_abundance(abundance, False)
+    result = sim @ abundance_obj
+    assert allclose(result, expected)
+
+
+def test_square_similarity_requirement():
+    sim = SimilarityFromArray(array([[1.0, 0.4, 0.6], [0.2, 1.0, 0.9]]))
+    counts = array([[1], [1], [1]])
+    with raises(InvalidArgumentError):
+        Metacommunity(counts, sim).to_dataframe(viewpoint=0)
+
+
+def test_interset_diversity_forbidden():
+    sim = IntersetSimilarityFromFunction(
+        similarity_from_distance,
+        X=array([[1, 0, 0]]),
+        Y=array([[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]]),
+    )
+    counts = array([[1, 1, 1, 1, 1]])
+    with raises(InvalidArgumentError):
+        Metacommunity(counts, sim).to_dataframe(viewpoint=0)
+
+
+def test_matmul():
+    similarity_df = DataFrame(
+        {"bee": [0.6, 0.22], "butterfly": [0.55, 0.27], "lobster": [0.45, 0.28]},
+        index=["ladybug", "fish"],
+    )
+    similarity = SimilarityFromDataFrame(similarity_df)
+    abundance = make_abundance(array([[5000], [2000], [3000]]), False)
+    expected = array([[0.545], [0.248]])
+    relative_abundance = similarity @ abundance
+    assert allclose(expected, relative_abundance)

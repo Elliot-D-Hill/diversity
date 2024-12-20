@@ -9,15 +9,22 @@ from numpy import (
     inf,
     float32,
     zeros,
+    dot,
 )
+from numpy.linalg import norm
 import ray
 from greylock.similarity import (
     SimilarityFromArray,
     SimilarityFromFunction,
     SimilarityFromSymmetricFunction,
 )
-from greylock.ray import SimilarityFromRayFunction, SimilarityFromSymmetricRayFunction
+from greylock.ray import (
+    SimilarityFromRayFunction,
+    SimilarityFromSymmetricRayFunction,
+    IntersetSimilarityFromRayFunction,
+)
 import greylock.tests.mockray as mockray
+from greylock.tests.similarity_test import similarity_from_distance
 from pytest import fixture, raises, mark
 from greylock.tests.similarity_test import (
     relative_abundance_3by2,
@@ -26,6 +33,7 @@ from greylock.tests.similarity_test import (
     X_3by2,
 )
 from greylock import Metacommunity
+from greylock.exceptions import InvalidArgumentError
 
 
 def ray_fix(monkeypatch):
@@ -194,9 +202,22 @@ X_large = array(
 
 
 def similarity_function(a, b):
-    a = a / sqrt(sum(a * a))
-    b = b / sqrt(sum(b * b))
-    return sum(a * b)
+    a = a / norm(a)
+    b = b / norm(b)
+    return dot(a, b)
+
+
+@mark.parametrize(
+    "x, y, expected",
+    [
+        (array([1, 2, 3]), array([1, 2, 3]), 1.0),
+        (array([0, 1, 0]), array([2, 0, 0]), 0.0),
+        (array([0, 1, 1]), array([0, 1, 0]), 1 / sqrt(2)),
+        (array([0, 1, 1]), array([1, 1, 0]), 1 / 2),
+    ],
+)
+def test_similarity_function(x, y, expected):
+    assert allclose(similarity_function(x, y), expected)
 
 
 @mark.parametrize(
@@ -245,3 +266,37 @@ def test_comparisons():
         results.append(df.drop(columns="community"))
     for result in results[1:]:
         assert allclose(results[0].to_numpy(), result.to_numpy())
+
+
+@mark.parametrize(
+    "X, Y, abundance, expected",
+    [
+        [
+            array([[2, 1, 5], [4, 3, 2]]),
+            array([[2, 0, 5], [4, 2, 1], [2, 0, 5]]),
+            array([[0.5, 0.1], [0.25, 0.1], [0.25, 0.8]]),
+            array([[0.27846671, 0.33211435], [0.06766633, 0.03257625]]),
+        ],
+        [
+            array([[1, 0, 0]]),
+            array([[1, 0, 0], [0, 1, 0], [0, 1, 1]]),
+            array([[1.0, 0.8, 0.0], [0.0, 0.1, 0.5], [0.0, 0.1, 0.5]]),
+            array([[1.0, 0.84200379, 0.21001897]]),
+        ],
+    ],
+)
+def test_interset_similarity(X, Y, abundance, expected):
+    sim = IntersetSimilarityFromRayFunction(similarity_from_distance, X, Y)
+    result = sim.weighted_abundances(abundance)
+    assert allclose(result, expected)
+
+
+def test_interset_diversity_forbidden():
+    sim = IntersetSimilarityFromRayFunction(
+        similarity_from_distance,
+        X=array([[1, 0, 0]]),
+        Y=array([[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]]),
+    )
+    counts = array([[1, 1, 1, 1, 1]])
+    with raises(InvalidArgumentError):
+        Metacommunity(counts, sim).to_dataframe(viewpoint=0)

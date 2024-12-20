@@ -16,16 +16,17 @@
   - [alpha diversities](#alpha-diversities)
   - [beta diversities](#beta-diversities)
 - [Advanced usage](#advanced-usage)
+- [Calculating ordinariness](#calculating-ordinariness)
 - [Command-line usage](#command-line-usage)
 - [Applications](#applications)
 - [Alternatives](#alternatives)
 
 # About
 
-`greylock` calculates effective numbers in an extended version of the Hill framework, with extensions due to Leinster and Cobbold and Reeve et al. “Extending” a hill makes a mountain. At 3,489 feet (1,063 meters), Mount Greylock is Massachusetts’ tallest mountain. It is named for Gray Lock (c. 1670–1750),  a historical figure of the Abnaki, an indigenous people of New England.
+`greylock` calculates effective numbers in an extended version of the Hill framework, with extensions due to Leinster and Cobbold and Reeve et al. (the "LCR framework"). “Extending” a hill makes a mountain; Mount Greylock is Massachusetts’ tallest. It is named for Gray Lock (c. 1670–1750),  a historical figure of the Abnaki, an indigenous people of the New England region of eastern North America.
 
 ## Availability and installation
-The package is available on GitHub at https://github.com/ArnaoutLab/diversity. It can be installed by running
+`greylock` is available on GitHub at https://github.com/ArnaoutLab/diversity. It can be installed by running
 
 `pip install greylock`
 
@@ -60,11 +61,11 @@ Some diversity indices compare the diversities of the subcommunities with respec
 
 ## Similarity-sensitive diversity
 
-In addition to being sensitive to frequency, it often makes sense to account for similarity in a diversity measure. For example, a community of two different types of rodents may be considered less diverse than a community where one of the rodent species was replaced by the same number of individuals of a bird species. [Reeve et al.](https://arxiv.org/abs/1404.6520) and [Leinster and Cobbold](https://doi.org/10.1890/10-2402.1) present a general mathematically rigorous way of incorporating similarity measures into Hill's framework. The result is a family of similarity-sensitive diversity indices parameterized by the same viewpoint parameter as well as the similarity function used for the species in the meta- or subcommunities of interest. These similarity-sensitive diversity measures account for both the pairwise similarity between all species and their frequencies.
+In addition to being sensitive to frequency, it often makes sense to account for similarity in a diversity measure. For example, a community of two different types of rodents may be considered less diverse than a community where one of the rodent species was replaced by the same number of individuals of a bird species. [Leinster and Cobbold](https://doi.org/10.1890/10-2402.1) and [Reeve et al.](https://arxiv.org/abs/1404.6520) present a general mathematically rigorous way of incorporating similarity measures into Hill's framework, resulting in what we refer to as the LCR framework or simply LCR. LCR describes a family of similarity-sensitive diversity indices parameterized by the same viewpoint parameter as well as the similarity function used for the species in the meta- or subcommunities of interest. These similarity-sensitive diversity measures account for both the pairwise similarity between all species and their frequencies.
 
 ## Rescaled diversity indices
 
-In addition to the diversity measures introduced by Reeve et al, we also included two new rescaled measures $\hat{\rho}$ and $\hat{\beta}$, as well as their metacommunity counterparts. The motivation for introducing these measures is that $\rho$ can become very large if the number of subcommunities is large. Similarly, $\beta$ can become very small in this case. The rescaled versions are designed so that they remain of order unity even when there are lots of subcommunities.
+In addition to the diversity measures introduced by [Reeve et al.](https://arxiv.org/abs/1404.6520), we also included two new rescaled measures $\hat{\rho}$ and $\hat{\beta}$, as well as their metacommunity counterparts. The motivation for introducing these measures is that $\rho$ can become very large if the number of subcommunities is large. Similarly, $\beta$ can become very small in this case. The rescaled versions are designed so that they remain of order unity even when there are lots of subcommunities.
 
 ## One package to rule them all
 
@@ -481,6 +482,59 @@ pip install 'greylock[ray]'
 To actually use Ray, replace the use of `SimilarityFromFunction` and `SimilarityFromSymmetricFunction` with `SimilarityFromRayFunction` and `SimilarityFromSymmetricRayFunction` respectively.
 Each `chunk_size` rows of the similarity matrix are processed as a separate job. Thanks to this parallelization, up to an N-fold speedup is possible 
 (where N is the number of cores or nodes).
+
+## Calculating ordinariness
+
+In LCR, diversity is essentially a power mean of the “ordinariness” of each species in the community ([Leinster and Cobbold](https://doi.org/10.1890/10-2402.1), p.479, right column). The ordinariness of species _i_ is the total abundance of all the species in the community that are similar to _i_, weighted by their similarity and their abundance. (This includes _i_ itself, which is of course 100% similar to itself; $Z_{ii}=1$.) If the community contains many species that are similar to _i_ and/or if those species are very abundant, the ordinariness of species _i_ will be high: species _i_ will be considered unexceptional relative to these many/abundant similar species in the community, and in that sense is quite "ordinary" for the community.
+
+There are situations in which one is interested in the ordinariness of a species _j_ that is *not* in the community: i.e. how similar the species in the community are to this outside member, weighted by their relative abundances and their similarity to _j_. (See [Braun et al. 2023](https://www.biorxiv.org/content/10.1101/2023.09.08.556703v1) for an example, in which the investigators start with an antibody _j_ and wish to calculate its ordinariness in "communities" of antibodies termed repertoires. In this context, the ordinariness is the repertoire's "binding capacity" for the molecules that antibody _j_ is best at binding.)
+
+`greylock` can calculate ordinariness, whether the species of interest is present in the community (_i_ above) or not (_j_).
+
+For example, let's suppose we want to probe a community of bees, butterflies, and lobsters for the prevalance of _species similar to_ ladybugs and fish. We can re-use
+some of the same similarity values as above in a matrix with rows being the query species and columns being the community species:
+
+```python
+similarity = S_2b_df.loc[['ladybug', 'fish'], ['bee', 'butterfly', 'lobster']]   
+```
+
+This gives us a non-square similarity matrix:
+```
+          bee  butterfly  lobster
+ladybug  0.60       0.55     0.45
+fish     0.22       0.27     0.28
+```
+
+We again represent community compositions as a column vectors:
+```
+counts = array([[5000],
+       [2000],
+       [3000]])
+```
+Calculating the relative abundance of species _similar to_ ladybugs and fish in our community is straightforward given these small hard-coded data:
+```
+>>> similarity @ (counts/counts.sum())
+             0
+ladybug  0.545
+fish     0.248
+```
+In a more realistic case, with several subcommunities (for example, samples from several patients) and tens of thousands of different species 
+(for example, immune repertoire sequences), it may be too computationally intensive to load the entire similarity matrix into memory at once.
+`greylock` allows on-the-fly generation and application of the similarity matrix from a similarity function and feature vectors, which may be 
+paralellized using Ray. For diversity calculations, we did this using the `SimilarityFromRayFunction` class; for the query vs. community calcuations,
+we need to use the `IntersetSimilarityFromRayFunction` class instead, like so:
+
+```
+from greylock.abundance import make_abundance
+from greylock.ray import IntersetSimilarityFromRayFunction
+abundance = make_abundance(df)
+similarity = IntersetSimilarityFromRayFunction(
+  similarity_function,
+  query_species,
+  community_species)
+relative_abundances = similarity @ abundance
+```
+
 
 # Command-line usage
 The `greylock` package can also be used from the command line as a module (via `python -m`). To illustrate using `greylock` this way, we re-use again the example with counts_2b_1 and S_2b, now with counts_2b_1 also saved as a csv file (note again `index=False`):
